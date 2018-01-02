@@ -21,6 +21,9 @@
   },
   "homepage": "https://github.com/jiangplus/datbook#readme",
   "dependencies": {
-    "node-dat-archive": "^2.0.0"
+    "dat-node": "^3.5.6",
+    "express": "^4.16.2",
+    "node-dat-archive": "^2.0.0",
+    "subcommand": "^2.1.0"
   }
 }
