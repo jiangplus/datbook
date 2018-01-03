@@ -1,32 +1,29 @@
 #!/usr/bin/env node
 
+const util = require('util')
 var subcommand = require('subcommand')
 var Dat = require('dat-node')
+var createDat = util.promisify(Dat)
 
 
-const express = require('express');
-const http = require('http');
+const express = require('express')
+const http = require('http')
 
 process.title = 'datbook'
 
 var commands = [
   {
     name: 'create',
-    command: function (args) {
+    command: async function (args) {
       var dir = process.cwd()
       console.log('dir: ', dir)
 
-      Dat(dir, function (err, dat) {
-        if (err) throw err
-        console.log('Datbook created successfully! Link: dat://' + dat.key.toString('hex'))
-      
-        dat.importFiles()
-        dat.archive.readdir('/', function (err, list) {
-          if (err) throw err
-          console.log(list)
-        })
+      var dat = await createDat(dir);
+      console.log('Datbook created successfully! Link: dat://' + dat.key.toString('hex'))
 
-      })
+      dat.importFiles()
+      var list = await util.promisify(dat.archive.readdir('/'))
+      console.log(list)
     }
   },
   {
