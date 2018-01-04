@@ -1,43 +1,107 @@
 #!/usr/bin/env node
 
+const yargs = require('yargs');
 const util = require('util')
-var subcommand = require('subcommand')
-var Dat = require('dat-node')
-var createDat = util.promisify(Dat)
-
-
 const express = require('express')
 const http = require('http')
+const fs = require('fs')
+const path = require('path')
+const Dat = require('dat-node')
+
+const DatJson = require('dat-json')
+const prompt = require('prompt')
+const chalk = require('chalk')
+
+function exitInvalidNode () {
+  console.error('Node Version:', process.version)
+  console.error('Unfortunately, we only support Node >= v8. Please upgrade to use Dat.')
+  console.error('You can find the latest version at https://nodejs.org/')
+  process.exit(1)
+}
+
+// Check node version to make sure we support
+let NODE_VERSION_SUPPORTED = 8
+let nodeMajorVer = process.version.match(/^v([0-9]+)\./)[1]
+let invalidNode = nodeMajorVer < NODE_VERSION_SUPPORTED
+if (invalidNode) exitInvalidNode()
 
 process.title = 'datbook'
+const dir = process.cwd()
 
-var commands = [
-  {
-    name: 'create',
-    command: async function (args) {
-      var dir = process.cwd()
-      console.log('dir: ', dir)
-
-      var dat = await createDat(dir);
-      console.log('Datbook created successfully! Link: dat://' + dat.key.toString('hex'))
-
-      dat.importFiles()
-      var list = await util.promisify(dat.archive.readdir('/'))
-      console.log(list)
-    }
-  },
-  {
-    name: 'clone',
-    command: function (args) {
-      console.log('cloning')
-      var dir = process.cwd()
-      console.log('dir: ', dir)
-      console.log(args._[0])
-
-      Dat(dir, {key: args._[0]}, function (err, dat) {
+let argv = yargs
+  .usage('usage: datbook <command> <key>')
+  .command(
+    'create',
+    '',
+    () => {},
+    async function (argv) {
+      Dat(dir, {errorIfExists: true}, function (err, dat) {
+        if (err && err.name === 'ExistsError') return console.error('\nArchive already exists.\nYou can use `dat sync` to update.')
         if (err) throw err
 
-      	console.log(dat.key)
+
+        var datjson = DatJson(dat.archive, { file: path.join(dir, 'dat.json') })
+        fs.readFile(path.join(dir, 'dat.json'), 'utf-8', function (err, data) {
+          if (err || !data) return doPrompt()
+          data = JSON.parse(data)
+          debug('read existing dat.json data', data)
+          doPrompt(data)
+        })
+
+        function doPrompt (data) {
+          if (!data) data = {}
+
+          var schema = {
+            properties: {
+              title: {
+                description: chalk.magenta('Title'),
+                default: data.title || '',
+                // pattern: /^[a-zA-Z\s\-]+$/,
+                // message: 'Name must be only letters, spaces, or dashes',
+                required: false
+              },
+              description: {
+                description: chalk.magenta('Description'),
+                default: data.description || ''
+              }
+            }
+          }
+
+          prompt.override = { title: '', description: '' }
+          prompt.message = ''
+          prompt.start()
+          prompt.get(schema, writeDatJson)
+
+          function writeDatJson (err, results) {
+            if (err) return exitErr(err) // prompt error
+            if (!results.title && !results.description) return done()
+            datjson.create(results, done)
+          }
+        }
+
+        function done () {
+          console.log('Datbook created successfully! Link: dat://' + dat.key.toString('hex'))
+        
+          dat.importFiles()
+          dat.archive.readdir('/', function (err, list) {
+            if (err) throw err
+            console.log('files:')
+            console.log(list)
+          })
+        }
+
+      })
+    }
+  )
+  .command(
+    'clone <key>',
+    '',
+    () => {},
+    async function (argv) {
+      Dat(dir, {key: argv.key}, function (err, dat) {
+        if (err) throw err
+
+        console.log(dat.key)
         dat.joinNetwork(function (err) {
           if (err) throw err
       
@@ -48,14 +112,12 @@ var commands = [
         })
       })
     }
-  },
-  {
-    name: 'sync',
-    command: function (args) {
-      var dir = process.cwd()
-      console.log('dir: ', dir)
-      dat.importFiles()
-      
+  )
+  .command(
+    'sync',
+    '',
+    () => {},
+    async function (argv) {
       Dat(dir, function (err, dat) {
         if (err) throw err
         dat.joinNetwork()
@@ -66,18 +128,17 @@ var commands = [
         })
       })
     }
-  },
-  {
-    name: 'serve',
-    options: [
-      {
-        name: 'port',
-      }
-    ],
-    command: function (args) {
-      var dir = process.cwd()
-      console.log('dir: ', dir)
-      
+  )
+  .command(
+    'serve',
+    '',
+    function (yargs) {
+      return yargs.option('p', {
+        alias: 'port',
+        describe: 'http server binding port'
+      })
+    },
+    async function (argv) {
       Dat(dir, function (err, dat) {
         if (err) throw err
         dat.joinNetwork()
@@ -87,12 +148,12 @@ var commands = [
       const app = express();
 
       function shadowfiles (req, res, next) {
-        var options = {
+        let options = {
           root: __dirname + '/../public/',
           dotfiles: 'deny',
         };
 
-        var fileName = (req.path === '/' || req.path === '/index.html')  ? 'index.html' : req.params.name;
+        let fileName = (req.path === '/' || req.path === '/index.html')  ? 'index.html' : req.params.name;
         res.sendFile(fileName, options, function (err) {
           if (err) {
             next(err);
@@ -103,7 +164,7 @@ var commands = [
       app.get('/', shadowfiles)
       app.get('/~/:name', shadowfiles);
 
-      var options = {
+      let options = {
         dotfiles: 'ignore',
         etag: false,
         extensions: ['htm', 'html'],
@@ -114,92 +175,51 @@ var commands = [
 
       app.use(express.static(process.cwd(), options))
 
-      http.createServer(app).listen(3300);
-      console.log('Listening on http://localhost:3300');
+      let port = argv.port || 3300
+      http.createServer(app).listen(port);
+      console.log('Listening on http://localhost:'+3300);
     }
-  },
-  {
-    name: 'diff',
-    command: function (args) {
-      console.log('call foo', args)
+  )
+  .command(
+    'diff', 
+    '', 
+    () => {}, 
+    (argv) => {
+      yargs.showHelp();
     }
-  },
-  {
-    name: 'commit',
-    command: function (args) {
-      console.log('call foo', args)
+  )
+  .command(
+    'commit', 
+    '', 
+    () => {}, 
+    (argv) => {
+      yargs.showHelp();
     }
-  },
-  {
-    name: 'checkout',
-    command: function (args) {
-      console.log('call foo', args)
+  )
+  .command(
+    'checkout', 
+    '', 
+    () => {}, 
+    (argv) => {
+      yargs.showHelp();
     }
-  },
-  {
-    name: 'status',
-    command: function (args) {
-      console.log('call foo', args)
+  )
+  .command(
+    'status', 
+    '', 
+    () => {}, 
+    (argv) => {
+      yargs.showHelp();
     }
-  },
-  {
-    name: 'help',
-    command: usage
-  }
-]
+  )
+  .command(
+    '*', 
+    '', 
+    () => {}, 
+    (argv) => {
+      yargs.showHelp();
+    }
+  )
+  .help()
+  .argv
 
-var config = {
-  root: {
-    command: usage
-  },
-  commands: commands
-}
-
-var match = subcommand(config)
-var result = match(process.argv.slice(2))
-
-
-function usage (opts, help, usage) {
-  if (opts.version) {
-    var pkg = require('../package.json')
-    console.error(pkg.version)
-    process.exit(1)
-  }
-  var msg = `
-Usage: dat <cmd> [<dir>] [options]
-
-Sharing Files:
-   datbook create                  create empty dat and dat.json
-
-Downloading Files:
-   datbook clone <link> [<dir>]    download a dat via link to <dir>
-   datbook pull                    update dat & exit
-   datbook sync                    live sync files with the network
-   datbook serve                   serve local files and live sync files with the network
-
-Info:
-   datbook diff                    log history for a dat
-   datbook commit                  log history for a dat
-   datbook checkout                log history for a dat
-   datbook status                  get key & info about a local dat
-
-Dat public registries:
-   datbook register                register new account
-   datbook login                   login to your account
-   datbook publish                 publish a dat
-   datbook whoami                  print active login information
-   datbook logout                  logout from active login
-
-Help:
-   datbook help                    print this usage guide
-   datbook --version, -v           print the dat version
-
-  `
-  console.error(msg)
-  if (usage) {
-    console.error('General Options:')
-    console.error(usage)
-  }
-  console.error('Have fun using Dat! Learn more at docs.datproject.org')
-  process.exit(1)
-}
